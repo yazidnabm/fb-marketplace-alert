@@ -288,17 +288,36 @@ class MarketplaceAlertBot:
         logger.info("Facebook Marketplace Alert Bot Starting...")
         logger.info("=" * 60)
 
-        # Login ke Facebook
-        logger.info("Logging in to Facebook...")
-        login_success = await asyncio.get_event_loop().run_in_executor(
-            None, self.scraper.login
-        )
+        # Login ke Facebook (dengan retry)
+        max_retries = 3
+        login_success = False
+        for attempt in range(1, max_retries + 1):
+            logger.info("Logging in to Facebook... (attempt %d/%d)", attempt, max_retries)
+            login_success = await asyncio.get_event_loop().run_in_executor(
+                None, self.scraper.login
+            )
+            if login_success:
+                break
+            logger.warning("Login attempt %d failed", attempt)
+            if attempt < max_retries:
+                logger.info("Retrying in 10 seconds...")
+                await asyncio.sleep(10)
+                # Restart browser sebelum retry
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self.scraper.close
+                )
 
         if not login_success:
-            logger.error("Failed to login to Facebook! Exiting...")
+            logger.error("Failed to login to Facebook after %d attempts!", max_retries)
             await self.telegram.send_message(
-                "❌ Bot gagal login ke Facebook!\n"
-                "Periksa email/password di file .env"
+                "❌ Bot gagal login ke Facebook!\n\n"
+                "Kemungkinan penyebab:\n"
+                "1. Facebook mendeteksi bot/VPS IP\n"
+                "2. Ada cookie consent/captcha yang menghalangi\n"
+                "3. Akun kena checkpoint/2FA\n"
+                "4. Email/password salah\n\n"
+                "📂 Cek folder debug/ di VPS untuk screenshot & HTML halaman.\n"
+                "Jalankan: ls debug/"
             )
             return
 

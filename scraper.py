@@ -91,14 +91,29 @@ class FacebookMarketplaceScraper:
         options.add_argument("--disable-infobars")
         options.add_argument("--lang=id-ID")
 
+        # Tambahan anti-detection untuk VPS
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.add_argument("--disable-setuid-sandbox")
+        options.add_argument("--remote-debugging-port=0")
+        options.add_argument("--disable-web-security")
+        options.add_argument("--allow-running-insecure-content")
+
         # Random user agent
         user_agent = random.choice(USER_AGENTS)
         options.add_argument(f"--user-agent={user_agent}")
-        logger.debug("Using User-Agent: %s", user_agent[:50])
+        logger.info("Using User-Agent: %s", user_agent[:60])
 
         # Sembunyikan tanda-tanda automation
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("useAutomationExtension", False)
+
+        # Preferences untuk terlihat seperti browser biasa
+        prefs = {
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+            "profile.default_content_setting_values.notifications": 2,
+        }
+        options.add_experimental_option("prefs", prefs)
 
         return options
 
@@ -112,15 +127,19 @@ class FacebookMarketplaceScraper:
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=options)
 
-            # Override navigator.webdriver property
+            # Set page load timeout
+            self.driver.set_page_load_timeout(60)
+
+            # Override navigator.webdriver property dan fingerprint lainnya
             self.driver.execute_cdp_cmd(
                 "Page.addScriptToEvaluateOnNewDocument",
                 {
                     "source": """
+                        // Hide webdriver
                         Object.defineProperty(navigator, 'webdriver', {
                             get: () => undefined
                         });
-                        // Override plugins
+                        // Realistic plugins
                         Object.defineProperty(navigator, 'plugins', {
                             get: () => [1, 2, 3, 4, 5]
                         });
@@ -128,12 +147,22 @@ class FacebookMarketplaceScraper:
                         Object.defineProperty(navigator, 'languages', {
                             get: () => ['id-ID', 'id', 'en-US', 'en']
                         });
+                        // Hide Chrome automation
+                        window.chrome = { runtime: {} };
+                        // Override permissions
+                        const originalQuery = window.navigator.permissions.query;
+                        window.navigator.permissions.query = (parameters) => (
+                            parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                        );
                     """
                 },
             )
 
-            # Set implicit wait
-            self.driver.implicitly_wait(10)
+            # Jangan pakai implicit wait karena bisa mask masalah
+            # Kita pakai explicit wait di _find_element_multi
+            self.driver.implicitly_wait(0)
             logger.info("Chrome WebDriver initialized successfully")
         except WebDriverException as e:
             logger.error("Failed to initialize WebDriver: %s", e)
@@ -281,34 +310,51 @@ class FacebookMarketplaceScraper:
 
     def _manual_login(self) -> bool:
         """Login manual dengan email dan password."""
-        try:
-            # Pertama, buka halaman utama Facebook untuk handle redirect
-            logger.info("Navigating to Facebook...")
-            self.driver.get("https://www.facebook.com")
+        # Coba beberapa URL login yang berbeda
+        login_urls = [
+            "https://www.facebook.com",
+            "https://www.facebook.com/login",
+            "https://m.facebook.com/login",  # Mobile version — sering lebih simpel
+            "https://mbasic.facebook.com/login",  # Basic version — paling simpel
+        ]
+
+        for url in login_urls:
+            logger.info("Trying login via: %s", url)
+            success = self._try_login_at_url(url)
+            if success:
+                return True
+            logger.warning("Login via %s failed, trying next...", url)
             self._random_delay(3, 5)
 
-            # Screenshot halaman awal untuk debugging
-            self._save_debug_screenshot("before_login")
+        logger.error("All login methods failed!")
+        return False
+
+    def _try_login_at_url(self, url: str) -> bool:
+        """Coba login di URL tertentu."""
+        try:
+            logger.info("Navigating to %s ...", url)
+            self.driver.get(url)
+            self._random_delay(4, 6)
+
+            # Screenshot halaman untuk debugging
+            url_label = url.replace("https://", "").replace("/", "_").replace(".", "_")
+            self._save_debug_screenshot(f"page_{url_label}")
             logger.info("Current URL: %s", self.driver.current_url)
             logger.info("Page title: %s", self.driver.title)
 
+            # Log ukuran halaman untuk deteksi halaman kosong/blocked
+            page_len = len(self.driver.page_source)
+            logger.info("Page source length: %d chars", page_len)
+
+            if page_len < 500:
+                logger.warning("Page seems too short, might be blocked")
+                self._save_page_source(f"short_page_{url_label}")
+                return False
+
             # Dismiss cookie consent dialog jika ada
-            self._dismiss_cookie_dialog()
-            self._random_delay(1, 2)
-
-            # Cek apakah sudah di halaman login atau perlu navigate
-            if "/login" not in self.driver.current_url:
-                logger.info("Navigating to login page...")
-                self.driver.get("https://www.facebook.com/login")
-                self._random_delay(3, 5)
-
-                # Dismiss cookie dialog lagi jika muncul di halaman login
-                self._dismiss_cookie_dialog()
+            if self._dismiss_cookie_dialog():
                 self._random_delay(1, 2)
-
-            # Screenshot halaman login
-            self._save_debug_screenshot("login_page")
-            logger.info("Login page URL: %s", self.driver.current_url)
+                self._save_debug_screenshot(f"after_cookie_{url_label}")
 
             # Cari email field dengan multiple selectors
             email_selectors = [
@@ -320,17 +366,25 @@ class FacebookMarketplaceScraper:
                 (By.XPATH, '//input[@id="email"]'),
                 (By.XPATH, '//input[@name="email"]'),
                 (By.XPATH, '//input[@type="text" and @data-testid="royal_email"]'),
+                # Mobile/basic Facebook selectors
+                (By.CSS_SELECTOR, 'input[name="email"][type="text"]'),
+                (By.XPATH, '//input[@placeholder="Email or phone number"]'),
+                (By.XPATH, '//input[@placeholder="Email atau nomor telepon"]'),
+                (By.XPATH, '//input[@placeholder="Alamat email atau nomor telepon"]'),
+                (By.XPATH, '//input[contains(@aria-label, "email")]'),
+                (By.XPATH, '//input[contains(@aria-label, "Email")]'),
+                # Generic text input fallback
+                (By.XPATH, '(//input[@type="text"])[1]'),
             ]
 
-            email_field = self._find_element_multi(email_selectors, timeout=20)
+            email_field = self._find_element_multi(email_selectors, timeout=15)
             if not email_field:
-                logger.error("Email field not found! Saving debug info...")
-                self._save_debug_screenshot("email_field_not_found")
-                # Log page source untuk debugging
-                self._save_page_source("login_page")
+                logger.error("Email field not found at %s!", url)
+                self._save_debug_screenshot(f"no_email_{url_label}")
+                self._save_page_source(f"no_email_{url_label}")
                 return False
 
-            logger.info("Email field found, typing email...")
+            logger.info("✓ Email field found, typing email...")
             email_field.clear()
             self._human_type(email_field, self.email)
             self._random_delay(0.5, 1.5)
@@ -343,15 +397,18 @@ class FacebookMarketplaceScraper:
                 (By.CSS_SELECTOR, 'input[type="password"]'),
                 (By.XPATH, '//input[@id="pass"]'),
                 (By.XPATH, '//input[@type="password"]'),
+                (By.XPATH, '//input[contains(@aria-label, "password")]'),
+                (By.XPATH, '//input[contains(@aria-label, "Password")]'),
+                (By.XPATH, '//input[contains(@aria-label, "Kata sandi")]'),
             ]
 
             pass_field = self._find_element_multi(pass_selectors, timeout=10)
             if not pass_field:
-                logger.error("Password field not found!")
-                self._save_debug_screenshot("pass_field_not_found")
+                logger.error("Password field not found at %s!", url)
+                self._save_debug_screenshot(f"no_pass_{url_label}")
                 return False
 
-            logger.info("Password field found, typing password...")
+            logger.info("✓ Password field found, typing password...")
             pass_field.clear()
             self._human_type(pass_field, self.password)
             self._random_delay(0.5, 1.5)
@@ -363,11 +420,18 @@ class FacebookMarketplaceScraper:
                 (By.CSS_SELECTOR, 'button[name="login"]'),
                 (By.CSS_SELECTOR, 'button[type="submit"]'),
                 (By.CSS_SELECTOR, 'input[type="submit"]'),
+                (By.CSS_SELECTOR, 'input[name="login"]'),
                 (By.XPATH, '//button[@name="login"]'),
                 (By.XPATH, '//button[@type="submit"]'),
                 (By.XPATH, '//button[contains(text(), "Log In")]'),
+                (By.XPATH, '//button[contains(text(), "Log in")]'),
                 (By.XPATH, '//button[contains(text(), "Masuk")]'),
+                (By.XPATH, '//input[@value="Log In"]'),
+                (By.XPATH, '//input[@value="Masuk"]'),
                 (By.CSS_SELECTOR, '[data-testid="royal_login_button"]'),
+                # mbasic facebook
+                (By.XPATH, '//input[@type="submit" and @value="Log In"]'),
+                (By.XPATH, '//input[@type="submit" and @value="Masuk"]'),
             ]
 
             login_button = self._find_element_multi(login_selectors, timeout=10)
@@ -376,33 +440,34 @@ class FacebookMarketplaceScraper:
                 logger.warning("Login button not found, pressing Enter...")
                 pass_field.send_keys(Keys.RETURN)
             else:
-                logger.info("Login button found, clicking...")
+                logger.info("✓ Login button found, clicking...")
                 login_button.click()
 
             self._random_delay(5, 8)
 
             # Screenshot setelah klik login
-            self._save_debug_screenshot("after_login_click")
+            self._save_debug_screenshot(f"after_login_{url_label}")
             logger.info("Post-login URL: %s", self.driver.current_url)
+            logger.info("Post-login title: %s", self.driver.title)
 
             # Cek apakah login berhasil
             if self._check_logged_in():
-                logger.info("Login manual berhasil!")
+                logger.info("✓ Login berhasil via %s!", url)
                 self._save_cookies()
                 self._is_logged_in = True
                 return True
             else:
-                logger.error("Login gagal — mungkin ada checkpoint/2FA")
+                logger.error("Login gagal via %s", url)
                 logger.error("Current URL: %s", self.driver.current_url)
-                self._save_debug_screenshot("login_failed")
-                self._save_page_source("login_failed")
+                self._save_debug_screenshot(f"login_failed_{url_label}")
+                self._save_page_source(f"login_failed_{url_label}")
                 return False
 
         except Exception as e:
-            logger.error("Login error: %s", type(e).__name__)
+            logger.error("Login error at %s: %s", url, type(e).__name__)
             logger.error("Error details: %s", str(e)[:500])
-            self._save_debug_screenshot("login_error")
-            self._save_page_source("login_error")
+            self._save_debug_screenshot(f"login_error_{url_label}")
+            self._save_page_source(f"login_error_{url_label}")
             return False
 
     def _save_page_source(self, name: str):
