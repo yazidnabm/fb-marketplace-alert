@@ -549,7 +549,11 @@ class FacebookMarketplaceScraper:
             URL lengkap untuk Facebook Marketplace
         """
         # Base URL marketplace search
-        base = f"{self.MARKETPLACE_BASE_URL}/search"
+        if city and city.strip():
+            city_slug = quote_plus(city.lower().strip())
+            base = f"{self.MARKETPLACE_BASE_URL}/{city_slug}/search"
+        else:
+            base = f"{self.MARKETPLACE_BASE_URL}/search"
 
         params = {
             "query": keyword,

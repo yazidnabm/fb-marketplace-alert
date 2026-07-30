@@ -4,7 +4,7 @@
   "max_listings_per_search": 30,
   "auto_cleanup_days": 30,
   "location": {
-    "city": "Jakarta",
+    "cities": ["Jakarta", "Surabaya", "Bandung"],
     "radius_km": 40
   },
   "searches": [

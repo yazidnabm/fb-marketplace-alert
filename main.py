@@ -132,6 +132,7 @@ class MarketplaceAlertBot:
                         min_price=s.get("min_price", 0),
                         max_price=s.get("max_price", 999999999),
                         condition=s.get("condition", "all"),
+                        location=s.get("location", None),
                         enabled=True,
                     )
                 )
@@ -167,7 +168,17 @@ class MarketplaceAlertBot:
             logger.warning("No active search criteria found!")
             return
 
-        city = self.config.get("location", {}).get("city", "Jakarta")
+        # Dapatkan daftar kota (bisa berupa list atau string)
+        loc_cfg = self.config.get("location", {})
+        if isinstance(loc_cfg.get("cities"), list):
+            default_cities = loc_cfg["cities"]
+        elif isinstance(loc_cfg.get("city"), list):
+            default_cities = loc_cfg["city"]
+        elif isinstance(loc_cfg.get("city"), str):
+            default_cities = [loc_cfg["city"]]
+        else:
+            default_cities = ["Jakarta"]
+
         max_listings = self.config.get("max_listings_per_search", 30)
 
         total_new = 0
@@ -176,27 +187,34 @@ class MarketplaceAlertBot:
             if not self._monitoring:
                 break
 
-            logger.info("Scanning: '%s' ...", criteria.keyword)
+            # Gunakan kota spesifik kriteria jika ada, atau gunakan daftar kota global
+            target_cities = [criteria.location] if criteria.location else default_cities
 
-            # Scrape listings (blocking call, run in thread)
-            listings = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda c=criteria: self.scraper.scrape_listings(
-                    c, city=city, max_listings=max_listings
-                ),
-            )
-
-            # Process setiap listing
-            for listing in listings:
+            for city in target_cities:
                 if not self._monitoring:
                     break
 
-                # Cek duplikat
-                if self.db.is_duplicate(listing.listing_id):
-                    continue
+                logger.info("Scanning: '%s' (city=%s) ...", criteria.keyword, city)
 
-                # Simpan ke database
-                self.db.save_listing(listing)
+                # Scrape listings (blocking call, run in thread)
+                listings = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda c=criteria, ct=city: self.scraper.scrape_listings(
+                        c, city=ct, max_listings=max_listings
+                    ),
+                )
+
+                # Process setiap listing
+                for listing in listings:
+                    if not self._monitoring:
+                        break
+
+                    # Cek duplikat
+                    if self.db.is_duplicate(listing.listing_id):
+                        continue
+
+                    # Simpan ke database
+                    self.db.save_listing(listing)
 
                 # Kirim notifikasi
                 success = await self.telegram.send_listing_notification(listing)

@@ -82,6 +82,7 @@ class SearchCriteria:
     min_price: int = 0
     max_price: int = 999999999
     condition: str = "all"  # "new", "used", atau "all"
+    location: Optional[str] = None  # Kota spesifik (opsional)
     enabled: bool = True
 
     def matches_listing(self, listing: Listing) -> bool:
