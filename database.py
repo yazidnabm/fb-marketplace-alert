@@ -83,25 +83,22 @@ class Database:
 
     def is_duplicate(self, listing_id: str) -> bool:
         """
-        Cek apakah listing sudah pernah disimpan dan dinotifikasi.
+        Cek apakah listing sudah pernah disimpan (sudah pernah diproses).
 
         Args:
             listing_id: ID unik listing dari Facebook
 
         Returns:
-            True jika listing sudah ada dan sudah dinotifikasi
+            True jika listing sudah ada di database
         """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT notified FROM listings WHERE listing_id = ?",
+                "SELECT 1 FROM listings WHERE listing_id = ?",
                 (listing_id,)
             )
-            row = cursor.fetchone()
-            if row is None:
-                return False
-            return bool(row["notified"])
+            return cursor.fetchone() is not None
         finally:
             conn.close()
 

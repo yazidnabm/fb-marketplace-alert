@@ -67,6 +67,7 @@ class MarketplaceAlertBot:
         self._scan_count = 0
         self._start_time = datetime.now()
         self._last_db_reset = datetime.now()
+        self._seen_ids: set = set()  # In-memory duplikat tracking (tidak terpengaruh DB cleanup)
 
         # Event loop reference
         self._loop: asyncio.AbstractEventLoop = None
@@ -222,34 +223,50 @@ class MarketplaceAlertBot:
                     if not self._monitoring:
                         break
 
-                    # Cek umur postingan jika max_age di-set
-                    if max_age is not None and not listing.is_within_max_age(max_age):
-                        logger.info(
-                            "Skipping listing '%s' (posted: '%s') — exceeds max age of %s hour(s)",
-                            listing.title, listing.posted_time, max_age
-                        )
+                    # Cek duplikat: in-memory set (tidak terpengaruh DB cleanup)
+                    if listing.listing_id in self._seen_ids:
                         continue
 
-                    # Cek duplikat
+                    # Cek duplikat: database (untuk persist antar restart)
                     if self.db.is_duplicate(listing.listing_id):
+                        self._seen_ids.add(listing.listing_id)
+                        continue
+
+                    # Cek umur postingan jika max_age di-set
+                    if max_age is not None and not listing.is_within_max_age(max_age):
+                        logger.debug(
+                            "Skipping '%s' (posted: '%s') — exceeds %s hour(s)",
+                            listing.title[:40], listing.posted_time, max_age
+                        )
+                        # Tetap tandai sebagai sudah dilihat agar tidak diproses ulang
+                        self._seen_ids.add(listing.listing_id)
+                        self.db.save_listing(listing)
+                        self.db.mark_notified(
+                            listing_id=listing.listing_id,
+                            chat_id=self.telegram_chat_id,
+                            success=True,
+                        )
                         continue
 
                     # Simpan ke database
                     self.db.save_listing(listing)
 
-                # Kirim notifikasi
-                success = await self.telegram.send_listing_notification(listing)
-                self.db.mark_notified(
-                    listing_id=listing.listing_id,
-                    chat_id=self.telegram_chat_id,
-                    success=success,
-                )
+                    # Kirim notifikasi
+                    success = await self.telegram.send_listing_notification(listing)
+                    self.db.mark_notified(
+                        listing_id=listing.listing_id,
+                        chat_id=self.telegram_chat_id,
+                        success=success,
+                    )
 
-                if success:
-                    total_new += 1
+                    # Tandai sebagai sudah dilihat
+                    self._seen_ids.add(listing.listing_id)
 
-                # Delay antar notifikasi supaya tidak spam
-                await asyncio.sleep(1.5)
+                    if success:
+                        total_new += 1
+
+                    # Delay antar notifikasi supaya tidak spam
+                    await asyncio.sleep(1.5)
 
             # Delay antar keyword
             if self._monitoring:

@@ -51,34 +51,50 @@ class Listing:
 
     def is_within_max_age(self, max_hours: float = 1.0) -> bool:
         """
-        Cek apakah listing di-post dalam kurun waktu max_hours (misal 1 jam).
-        Jika posted_time tidak tersedia, anggap lolos (True).
+        Cek apakah listing di-post dalam kurun waktu max_hours.
+        Jika posted_time tidak tersedia/tidak bisa diparse, TOLAK (False).
         """
         if not self.posted_time:
-            return True
+            # Tidak ada info waktu → tolak, tidak bisa memastikan umur
+            return False
 
         text = self.posted_time.lower().strip()
 
         # Baru saja / Just now / Sebentar
-        if any(k in text for k in ["baru saja", "just now", "sebentar"]):
+        if any(k in text for k in ["baru saja", "just now", "sebentar", "a few seconds"]):
             return True
 
-        # Menit / Minutes (selalu < 1 jam)
+        # Detik / Seconds (pasti < 1 jam)
+        if any(k in text for k in ["detik", "second", "sec"]):
+            return True
+
+        # Menit / Minutes (pasti < 1 jam)
         if any(k in text for k in ["menit", "minute", "min"]):
             return True
 
-        # Jam / Hours
+        # Jam / Hours — cek angkanya
         import re
-        jam_match = re.search(r"(\d+)\s*(?:jam|hour|hr|h)", text)
+        jam_match = re.search(r"(\d+)\s*(?:jam|hour|hours|hr|hrs)", text)
         if jam_match:
             hours = float(jam_match.group(1))
             return hours <= max_hours
 
-        # Hari / Weeks / Months / Years / Yesterday -> Pasti > 1 jam
-        if any(k in text for k in ["hari", "day", "kemarin", "yesterday", "minggu", "week", "bulan", "month", "tahun", "year"]):
+        # "an hour ago" / "1 hour" tanpa angka eksplisit
+        if any(k in text for k in ["an hour", "1 hour", "satu jam", "sejam"]):
+            return max_hours >= 1.0
+
+        # Hari / Weeks / Months / Years → Pasti > 1 jam
+        if any(k in text for k in [
+            "hari", "day", "days",
+            "kemarin", "yesterday",
+            "minggu", "week", "weeks",
+            "bulan", "month", "months",
+            "tahun", "year", "years",
+        ]):
             return False
 
-        return True
+        # Tidak bisa di-parse → tolak
+        return False
 
     def to_dict(self) -> dict:
         """Konversi ke dictionary untuk penyimpanan database."""
