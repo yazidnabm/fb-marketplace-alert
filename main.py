@@ -74,6 +74,7 @@ class MarketplaceAlertBot:
         self.telegram.set_callbacks(
             on_start=self._on_start,
             on_stop=self._on_stop,
+            on_shutdown=self._on_shutdown,
             get_status=self._get_status,
             is_monitoring=lambda: self._monitoring,
         )
@@ -152,6 +153,14 @@ class MarketplaceAlertBot:
         if self._monitoring_task and not self._monitoring_task.done():
             self._monitoring_task.cancel()
         logger.info("Monitoring stopped via Telegram command")
+
+    def _on_shutdown(self):
+        """Callback ketika user kirim /shutdown via Telegram (matikan proses total)."""
+        logger.info("Shutdown requested via Telegram command")
+        self._shutdown = True
+        self._monitoring = False
+        if self._monitoring_task and not self._monitoring_task.done():
+            self._monitoring_task.cancel()
 
     def _get_status(self) -> dict:
         """Callback untuk mendapat status bot."""
@@ -265,41 +274,46 @@ class MarketplaceAlertBot:
         """Loop utama monitoring — scan berulang sesuai interval."""
         logger.info("Monitoring loop started")
 
-        while self._monitoring and not self._shutdown:
-            try:
-                await self._do_single_scan()
-            except Exception as e:
-                logger.error("Error during scan: %s", e)
-
-                # Coba restart browser jika error
+        try:
+            while self._monitoring and not self._shutdown:
                 try:
-                    logger.info("Attempting to restart browser session...")
-                    success = await asyncio.get_event_loop().run_in_executor(
-                        None, self.scraper.restart
-                    )
-                    if success:
-                        logger.info("Browser session restarted successfully")
-                    else:
-                        logger.error("Failed to restart browser session")
-                except Exception as restart_err:
-                    logger.error("Error restarting browser: %s", restart_err)
+                    await self._do_single_scan()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error("Error during scan: %s", e)
 
-            if not self._monitoring or self._shutdown:
-                break
+                    # Coba restart browser jika error
+                    try:
+                        logger.info("Attempting to restart browser session...")
+                        success = await asyncio.get_event_loop().run_in_executor(
+                            None, self.scraper.restart
+                        )
+                        if success:
+                            logger.info("Browser session restarted successfully")
+                        else:
+                            logger.error("Failed to restart browser session")
+                    except Exception as restart_err:
+                        logger.error("Error restarting browser: %s", restart_err)
 
-            # Reload config untuk mendapat interval terbaru
-            self._reload_config()
-            interval = self.config.get("check_interval_minutes", 5) * 60
-
-            logger.info("Next scan in %d minutes...", interval // 60)
-
-            # Sleep dengan pengecekan berkala supaya bisa stop cepat
-            for _ in range(interval):
                 if not self._monitoring or self._shutdown:
                     break
-                await asyncio.sleep(1)
 
-        logger.info("Monitoring loop ended")
+                # Reload config untuk mendapat interval terbaru
+                self._reload_config()
+                interval = self.config.get("check_interval_minutes", 5) * 60
+
+                logger.info("Next scan in %d minutes...", interval // 60)
+
+                # Sleep dengan pengecekan berkala supaya bisa stop cepat
+                for _ in range(interval):
+                    if not self._monitoring or self._shutdown:
+                        break
+                    await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            logger.info("Monitoring task stopped cleanly")
+        finally:
+            logger.info("Monitoring loop ended")
 
     async def run(self):
         """Jalankan bot — Telegram polling + monitoring loop."""

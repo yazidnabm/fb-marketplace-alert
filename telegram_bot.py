@@ -26,6 +26,10 @@ from models import Listing, SearchCriteria
 logger = get_logger()
 
 
+import io
+import urllib.request
+
+
 class TelegramBot:
     """Telegram bot untuk notifikasi dan kontrol monitoring."""
 
@@ -52,6 +56,7 @@ class TelegramBot:
         # Callback functions yang akan di-set oleh main.py
         self._on_start: Optional[Callable] = None
         self._on_stop: Optional[Callable] = None
+        self._on_shutdown: Optional[Callable] = None
         self._get_status: Optional[Callable] = None
         self._is_monitoring: Optional[Callable] = None
 
@@ -64,6 +69,7 @@ class TelegramBot:
         on_stop: Callable,
         get_status: Callable,
         is_monitoring: Callable,
+        on_shutdown: Optional[Callable] = None,
     ):
         """
         Set callback functions dari main engine.
@@ -73,11 +79,28 @@ class TelegramBot:
             on_stop: Fungsi untuk menghentikan monitoring
             get_status: Fungsi untuk mendapat status bot
             is_monitoring: Fungsi untuk cek apakah sedang monitoring
+            on_shutdown: Fungsi untuk matikan bot secara total
         """
         self._on_start = on_start
         self._on_stop = on_stop
         self._get_status = get_status
         self._is_monitoring = is_monitoring
+        self._on_shutdown = on_shutdown
+
+    @staticmethod
+    def _download_image(url: str) -> Optional[bytes]:
+        """Download image bytes dengan User-Agent agar tidak diblokir CDN FB."""
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.read()
+        except Exception:
+            return None
 
     async def send_listing_notification(self, listing: Listing) -> bool:
         """
@@ -93,19 +116,23 @@ class TelegramBot:
             caption = listing.to_telegram_caption()
 
             if listing.image_url:
-                # Kirim foto dengan caption
+                # Coba download bytes gambar terlebih dahulu
+                img_bytes = await asyncio.get_event_loop().run_in_executor(
+                    None, self._download_image, listing.image_url
+                )
+                photo_data = io.BytesIO(img_bytes) if img_bytes else listing.image_url
+
                 try:
                     await self.bot.send_photo(
                         chat_id=self.chat_id,
-                        photo=listing.image_url,
+                        photo=photo_data,
                         caption=caption,
                         parse_mode=ParseMode.MARKDOWN_V2,
                     )
-                except Exception:
-                    # Jika kirim foto gagal, kirim sebagai teks biasa
-                    logger.warning(
-                        "Failed to send photo for listing %s, sending text only",
-                        listing.listing_id,
+                except Exception as photo_err:
+                    logger.debug(
+                        "Failed to send photo for listing %s (%s), sending text only",
+                        listing.listing_id, photo_err
                     )
                     # Fallback: kirim tanpa parse mode jika markdown error
                     try:
@@ -220,9 +247,26 @@ class TelegramBot:
 
         if self._on_stop:
             self._on_stop()
-            await update.message.reply_text("🛑 *Monitoring dihentikan\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+            await update.message.reply_text(
+                "🛑 *Monitoring dihentikan\\.*\n"
+                "Bot tetap siaga\\. Gunakan /start untuk mulai lagi, atau /shutdown untuk mematikan bot secara total\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
         else:
             await update.message.reply_text("❌ Bot belum siap.")
+
+    async def _cmd_shutdown(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk command /shutdown — matikan bot secara total dari Telegram."""
+        if str(update.effective_chat.id) != self.chat_id:
+            return
+
+        await update.message.reply_text(
+            "🔴 *Mematikan bot secara total...*\n"
+            "Proses Python di VPS akan dihentikan\\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        if self._on_shutdown:
+            self._on_shutdown()
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk command /status — lihat status bot."""
@@ -476,6 +520,7 @@ class TelegramBot:
             "   Format: `/remove <nomor>`\n"
             "⏰ /interval \\- Ubah interval pengecekan\n"
             "   Format: `/interval <menit>`\n"
+            "🔴 /shutdown \\- Matikan bot secara total\n"
             "❓ /help \\- Tampilkan bantuan ini\n"
         )
 
@@ -536,6 +581,8 @@ class TelegramBot:
         handlers = [
             ("start", self._cmd_start),
             ("stop", self._cmd_stop),
+            ("shutdown", self._cmd_shutdown),
+            ("exit", self._cmd_shutdown),
             ("status", self._cmd_status),
             ("list", self._cmd_list),
             ("add", self._cmd_add),
