@@ -1,0 +1,22 @@
+# Environment & credentials
+.env
+cookies.json
+
+# Database
+*.db
+
+# Logs & debug
+logs/
+debug/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/

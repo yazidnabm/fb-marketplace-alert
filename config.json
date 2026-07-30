@@ -1,0 +1,26 @@
+{
+  "check_interval_minutes": 5,
+  "facebook_cookies_file": "cookies.json",
+  "max_listings_per_search": 30,
+  "auto_cleanup_days": 30,
+  "location": {
+    "city": "Jakarta",
+    "radius_km": 40
+  },
+  "searches": [
+    {
+      "keyword": "iPhone 13",
+      "min_price": 3000000,
+      "max_price": 7000000,
+      "condition": "used",
+      "enabled": true
+    },
+    {
+      "keyword": "PS5",
+      "min_price": 4000000,
+      "max_price": 8000000,
+      "condition": "all",
+      "enabled": true
+    }
+  ]
+}
