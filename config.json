@@ -1,6 +1,7 @@
 {
   "check_interval_minutes": 5,
   "max_post_age_hours": 1,
+  "auto_cleanup_hours": 2,
   "facebook_cookies_file": "cookies.json",
   "max_listings_per_search": 30,
   "auto_cleanup_days": 30,

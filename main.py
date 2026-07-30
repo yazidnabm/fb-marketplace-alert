@@ -66,6 +66,7 @@ class MarketplaceAlertBot:
         self._monitoring_task: asyncio.Task = None
         self._scan_count = 0
         self._start_time = datetime.now()
+        self._last_db_reset = datetime.now()
 
         # Event loop reference
         self._loop: asyncio.AbstractEventLoop = None
@@ -265,7 +266,19 @@ class MarketplaceAlertBot:
         else:
             logger.info("Scan #%d completed — no new listings", self._scan_count)
 
-        # Cleanup old listings berkala (setiap 100 scan)
+        # Auto cleanup listing lama berdasarkan jam (misal Hapus data > 2 jam)
+        cleanup_hours = self.config.get("auto_cleanup_hours", None)
+        if cleanup_hours and cleanup_hours > 0:
+            self.db.cleanup_old_listings_hours(hours=cleanup_hours)
+
+        # Auto reset seluruh database jika diset (misal reset DB penuh setiap 2 jam)
+        reset_hours = self.config.get("auto_reset_db_hours", None)
+        if reset_hours and reset_hours > 0:
+            if (datetime.now() - self._last_db_reset).total_seconds() >= reset_hours * 3600:
+                self.db.reset_database()
+                self._last_db_reset = datetime.now()
+
+        # Fallback cleanup days
         if self._scan_count % 100 == 0:
             cleanup_days = self.config.get("auto_cleanup_days", 30)
             self.db.cleanup_old_listings(days=cleanup_days)

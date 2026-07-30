@@ -241,11 +241,69 @@ class Database:
             deleted = cursor.rowcount
             conn.commit()
 
+            # Reclaim disk space
+            cursor.execute("VACUUM;")
+
             if deleted > 0:
                 logger.info("Cleaned up %d old listings (older than %d days)", deleted, days)
             return deleted
         except sqlite3.Error as e:
             logger.error("Error cleaning up old listings: %s", e)
             return 0
+        finally:
+            conn.close()
+
+    def cleanup_old_listings_hours(self, hours: float = 2.0) -> int:
+        """
+        Hapus data listing yang lebih tua dari X jam dan kembalikan disk space (VACUUM).
+
+        Args:
+            hours: Jumlah jam (default: 2.0 jam)
+
+        Returns:
+            Jumlah record yang dihapus
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+
+            cursor.execute("""
+                DELETE FROM notifications WHERE listing_id IN (
+                    SELECT listing_id FROM listings WHERE found_at < ?
+                )
+            """, (cutoff,))
+
+            cursor.execute(
+                "DELETE FROM listings WHERE found_at < ?",
+                (cutoff,)
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+
+            # Vacuum untuk mengecilkan ukuran file .db di VPS
+            cursor.execute("VACUUM;")
+
+            if deleted > 0:
+                logger.info("Cleaned up %d listings older than %.1f hour(s) (file size reclaimed)", deleted, hours)
+            return deleted
+        except sqlite3.Error as e:
+            logger.error("Error cleaning up listings by hours: %s", e)
+            return 0
+        finally:
+            conn.close()
+
+    def reset_database(self) -> None:
+        """Kosongkan seluruh data tabel dan reclaim disk space (VACUUM)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM notifications;")
+            cursor.execute("DELETE FROM listings;")
+            conn.commit()
+            cursor.execute("VACUUM;")
+            logger.info("Database reset completely (all listings cleared & DB file size shrunk)")
+        except sqlite3.Error as e:
+            logger.error("Error resetting database: %s", e)
         finally:
             conn.close()
