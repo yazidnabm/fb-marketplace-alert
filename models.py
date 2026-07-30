@@ -49,6 +49,37 @@ class Listing:
         ]
         return "\n".join(line for line in lines if line is not None)
 
+    def is_within_max_age(self, max_hours: float = 1.0) -> bool:
+        """
+        Cek apakah listing di-post dalam kurun waktu max_hours (misal 1 jam).
+        Jika posted_time tidak tersedia, anggap lolos (True).
+        """
+        if not self.posted_time:
+            return True
+
+        text = self.posted_time.lower().strip()
+
+        # Baru saja / Just now / Sebentar
+        if any(k in text for k in ["baru saja", "just now", "sebentar"]):
+            return True
+
+        # Menit / Minutes (selalu < 1 jam)
+        if any(k in text for k in ["menit", "minute", "min"]):
+            return True
+
+        # Jam / Hours
+        import re
+        jam_match = re.search(r"(\d+)\s*(?:jam|hour|hr|h)", text)
+        if jam_match:
+            hours = float(jam_match.group(1))
+            return hours <= max_hours
+
+        # Hari / Weeks / Months / Years / Yesterday -> Pasti > 1 jam
+        if any(k in text for k in ["hari", "day", "kemarin", "yesterday", "minggu", "week", "bulan", "month", "tahun", "year"]):
+            return False
+
+        return True
+
     def to_dict(self) -> dict:
         """Konversi ke dictionary untuk penyimpanan database."""
         return {
@@ -83,6 +114,7 @@ class SearchCriteria:
     max_price: int = 999999999
     condition: str = "all"  # "new", "used", atau "all"
     location: Optional[str] = None  # Kota spesifik (opsional)
+    max_post_age_hours: Optional[float] = None  # Batas umur post dalam jam (misal 1.0)
     enabled: bool = True
 
     def matches_listing(self, listing: Listing) -> bool:

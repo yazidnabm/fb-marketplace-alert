@@ -133,6 +133,7 @@ class MarketplaceAlertBot:
                         max_price=s.get("max_price", 999999999),
                         condition=s.get("condition", "all"),
                         location=s.get("location", None),
+                        max_post_age_hours=s.get("max_post_age_hours", None),
                         enabled=True,
                     )
                 )
@@ -180,6 +181,7 @@ class MarketplaceAlertBot:
             default_cities = ["Jakarta"]
 
         max_listings = self.config.get("max_listings_per_search", 30)
+        global_max_age = self.config.get("max_post_age_hours", None)
 
         total_new = 0
 
@@ -189,6 +191,7 @@ class MarketplaceAlertBot:
 
             # Gunakan kota spesifik kriteria jika ada, atau gunakan daftar kota global
             target_cities = [criteria.location] if criteria.location else default_cities
+            max_age = criteria.max_post_age_hours if criteria.max_post_age_hours is not None else global_max_age
 
             for city in target_cities:
                 if not self._monitoring:
@@ -208,6 +211,14 @@ class MarketplaceAlertBot:
                 for listing in listings:
                     if not self._monitoring:
                         break
+
+                    # Cek umur postingan jika max_age di-set
+                    if max_age is not None and not listing.is_within_max_age(max_age):
+                        logger.info(
+                            "Skipping listing '%s' (posted: '%s') — exceeds max age of %s hour(s)",
+                            listing.title, listing.posted_time, max_age
+                        )
+                        continue
 
                     # Cek duplikat
                     if self.db.is_duplicate(listing.listing_id):
