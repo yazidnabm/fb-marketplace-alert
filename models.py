@@ -52,11 +52,13 @@ class Listing:
     def is_within_max_age(self, max_hours: float = 1.0) -> bool:
         """
         Cek apakah listing di-post dalam kurun waktu max_hours.
-        Jika posted_time tidak tersedia/tidak bisa diparse, TOLAK (False).
+        Karena Facebook Marketplace search grid tidak menampilkan teks umur post,
+        jika posted_time kosong, anggap lolos (True) agar tidak memblokir listing baru.
         """
         if not self.posted_time:
-            # Tidak ada info waktu → tolak, tidak bisa memastikan umur
-            return False
+            # Karena search grid FB diurutkan berdasarkan 'creation_time_descend' (terbaru),
+            # posted_time yang tidak muncul pada kartu grid dianggap lolos.
+            return True
 
         text = self.posted_time.lower().strip()
 
@@ -93,8 +95,8 @@ class Listing:
         ]):
             return False
 
-        # Tidak bisa di-parse → tolak
-        return False
+        # Default fallback untuk string lain yang tidak terbaca sebagai tanggal lama
+        return True
 
     def to_dict(self) -> dict:
         """Konversi ke dictionary untuk penyimpanan database."""
