@@ -71,21 +71,41 @@ class FacebookMarketplaceScraper:
         self._last_session_check = 0.0  # timestamp terakhir kali session dicek
 
     def _init_driver(self):
-        """Inisialisasi undetected-chromedriver (UC) — bypass bot detection otomatis."""
+        """Inisialisasi undetected-chromedriver dengan virtual display (bukan headless).
+
+        Headless Chrome masih bisa dideteksi Facebook Marketplace.
+        Solusi: jalankan Chrome normal di virtual display (Xvfb).
+        """
         if self.driver is not None:
             return
 
         try:
+            # Gunakan virtual display (Xvfb) untuk VPS — bukan headless mode
+            if self.headless:
+                try:
+                    from pyvirtualdisplay import Display
+                    if not hasattr(self, '_display') or self._display is None:
+                        self._display = Display(visible=False, size=(1920, 1080))
+                        self._display.start()
+                        logger.info("✓ Virtual display (Xvfb) started")
+                except ImportError:
+                    logger.warning(
+                        "pyvirtualdisplay not installed! Install with: "
+                        "pip install pyvirtualdisplay && sudo apt install xvfb"
+                    )
+                    logger.warning("Falling back to headless mode (may be detected)")
+
             options = uc.ChromeOptions()
 
-            if self.headless:
-                options.add_argument("--headless=new")
+            # JANGAN pakai headless — itu yang bikin terdeteksi
+            # Chrome akan jalan normal di virtual display (Xvfb)
 
             # Argumen dasar untuk VPS
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-gpu")
             options.add_argument("--window-size=1920,1080")
+            options.add_argument("--start-maximized")
             options.add_argument("--lang=id-ID")
             options.add_argument("--disable-notifications")
 
@@ -105,7 +125,7 @@ class FacebookMarketplaceScraper:
             self.driver.set_page_load_timeout(60)
             self.driver.implicitly_wait(0)
 
-            logger.info("✓ Undetected Chrome initialized successfully")
+            logger.info("✓ Undetected Chrome initialized successfully (non-headless + Xvfb)")
         except Exception as e:
             logger.error("Failed to initialize WebDriver: %s", e)
             raise
@@ -901,6 +921,15 @@ class FacebookMarketplaceScraper:
             finally:
                 self.driver = None
                 self._is_logged_in = False
+
+        if hasattr(self, '_display') and self._display is not None:
+            try:
+                self._display.stop()
+                logger.info("Virtual display stopped")
+            except Exception as e:
+                logger.warning("Error stopping virtual display: %s", e)
+            finally:
+                self._display = None
 
     def restart(self) -> bool:
         """Restart browser session (close dan login ulang)."""

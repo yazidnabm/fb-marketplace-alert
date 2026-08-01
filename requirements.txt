@@ -3,3 +3,4 @@ setuptools>=69.0
 selenium==4.27.1
 python-telegram-bot==21.9
 python-dotenv==1.0.1
+PyVirtualDisplay==3.0
