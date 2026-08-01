@@ -72,6 +72,7 @@ class FacebookMarketplaceScraper:
         self.headless = headless
         self.driver: Optional[webdriver.Chrome] = None
         self._is_logged_in = False
+        self._last_session_check = 0.0  # timestamp terakhir kali session dicek
 
     def _get_chrome_options(self) -> Options:
         """Konfigurasi Chrome options dengan anti-detection."""
@@ -517,6 +518,31 @@ class FacebookMarketplaceScraper:
             logger.warning("Error checking login status: %s", e)
             return False
 
+    def _verify_session(self) -> bool:
+        """Cek apakah browser session masih hidup dan login masih valid.
+        Throttled: hanya cek setiap 120 detik untuk menghindari overhead."""
+        try:
+            if self.driver is None:
+                return False
+            # Hanya cek setiap 2 menit
+            now = time.time()
+            if now - self._last_session_check < 120:
+                return True  # Asumsi masih valid
+            self._last_session_check = now
+
+            # Cek apakah browser masih responsif
+            current_url = self.driver.current_url
+
+            # Jika terlempar ke halaman login, sesi expired
+            if "/login" in current_url:
+                logger.warning("Session expired — redirected to login page")
+                return False
+
+            return True
+        except Exception as e:
+            logger.warning("Session verification failed: %s", e)
+            return False
+
     def _save_debug_screenshot(self, name: str):
         """Simpan screenshot untuk debugging."""
         try:
@@ -628,9 +654,14 @@ class FacebookMarketplaceScraper:
         Returns:
             List of Listing objects
         """
-        if not self._is_logged_in:
-            logger.error("Not logged in! Call login() first.")
-            return []
+        # Auto-relogin jika sesi expired
+        if not self._is_logged_in or not self._verify_session():
+            logger.warning("Session expired or not logged in, attempting auto-relogin...")
+            self._is_logged_in = False
+            if not self.login():
+                logger.error("Auto-relogin failed! Skipping this scan.")
+                return []
+            logger.info("Auto-relogin successful, continuing scan...")
 
         url = self._build_marketplace_url(
             keyword=criteria.keyword,
