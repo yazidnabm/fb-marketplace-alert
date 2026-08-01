@@ -1,8 +1,7 @@
 """
 scraper.py — Selenium scraper untuk Facebook Marketplace.
 
-Menggunakan headless Chrome untuk scraping listing dari Facebook Marketplace
-dengan berbagai teknik anti-detection.
+Menggunakan undetected-chromedriver untuk bypass bot detection Facebook.
 """
 
 import json
@@ -14,9 +13,7 @@ import hashlib
 from typing import List, Optional
 from urllib.parse import quote_plus, urlencode
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -27,7 +24,6 @@ from selenium.common.exceptions import (
     WebDriverException,
     StaleElementReferenceException,
 )
-from webdriver_manager.chrome import ChromeDriverManager
 
 from logger_setup import get_logger
 from models import Listing, SearchCriteria
@@ -70,102 +66,47 @@ class FacebookMarketplaceScraper:
         self.password = password
         self.cookies_file = cookies_file
         self.headless = headless
-        self.driver: Optional[webdriver.Chrome] = None
+        self.driver: Optional[uc.Chrome] = None
         self._is_logged_in = False
         self._last_session_check = 0.0  # timestamp terakhir kali session dicek
 
-    def _get_chrome_options(self) -> Options:
-        """Konfigurasi Chrome options dengan anti-detection."""
-        options = Options()
-
-        if self.headless:
-            options.add_argument("--headless=new")
-
-        # Anti-detection arguments
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized")
-        options.add_argument("--disable-infobars")
-        options.add_argument("--lang=id-ID")
-
-        # Tambahan anti-detection untuk VPS
-        options.add_argument("--disable-features=VizDisplayCompositor")
-        options.add_argument("--disable-setuid-sandbox")
-        options.add_argument("--remote-debugging-port=0")
-        options.add_argument("--disable-web-security")
-        options.add_argument("--allow-running-insecure-content")
-
-        # Random user agent
-        user_agent = random.choice(USER_AGENTS)
-        options.add_argument(f"--user-agent={user_agent}")
-        logger.info("Using User-Agent: %s", user_agent[:60])
-
-        # Sembunyikan tanda-tanda automation
-        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-        options.add_experimental_option("useAutomationExtension", False)
-
-        # Preferences untuk terlihat seperti browser biasa
-        prefs = {
-            "credentials_enable_service": False,
-            "profile.password_manager_enabled": False,
-            "profile.default_content_setting_values.notifications": 2,
-        }
-        options.add_experimental_option("prefs", prefs)
-
-        return options
-
     def _init_driver(self):
-        """Inisialisasi Selenium WebDriver."""
+        """Inisialisasi undetected-chromedriver (UC) — bypass bot detection otomatis."""
         if self.driver is not None:
             return
 
         try:
-            options = self._get_chrome_options()
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=options)
+            options = uc.ChromeOptions()
+
+            if self.headless:
+                options.add_argument("--headless=new")
+
+            # Argumen dasar untuk VPS
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--lang=id-ID")
+            options.add_argument("--disable-notifications")
+
+            # User agent realistis
+            user_agent = random.choice(USER_AGENTS)
+            options.add_argument(f"--user-agent={user_agent}")
+            logger.info("Using User-Agent: %s", user_agent[:60])
+
+            # Inisialisasi UC — otomatis patch Chrome untuk anti-detection
+            self.driver = uc.Chrome(
+                options=options,
+                use_subprocess=True,  # Lebih stabil di VPS
+                version_main=None,  # Auto-detect Chrome version
+            )
 
             # Set page load timeout
             self.driver.set_page_load_timeout(60)
-
-            # Override navigator.webdriver property dan fingerprint lainnya
-            self.driver.execute_cdp_cmd(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {
-                    "source": """
-                        // Hide webdriver
-                        Object.defineProperty(navigator, 'webdriver', {
-                            get: () => undefined
-                        });
-                        // Realistic plugins
-                        Object.defineProperty(navigator, 'plugins', {
-                            get: () => [1, 2, 3, 4, 5]
-                        });
-                        // Override languages
-                        Object.defineProperty(navigator, 'languages', {
-                            get: () => ['id-ID', 'id', 'en-US', 'en']
-                        });
-                        // Hide Chrome automation
-                        window.chrome = { runtime: {} };
-                        // Override permissions
-                        const originalQuery = window.navigator.permissions.query;
-                        window.navigator.permissions.query = (parameters) => (
-                            parameters.name === 'notifications' ?
-                            Promise.resolve({ state: Notification.permission }) :
-                            originalQuery(parameters)
-                        );
-                    """
-                },
-            )
-
-            # Jangan pakai implicit wait karena bisa mask masalah
-            # Kita pakai explicit wait di _find_element_multi
             self.driver.implicitly_wait(0)
-            logger.info("Chrome WebDriver initialized successfully")
-        except WebDriverException as e:
+
+            logger.info("✓ Undetected Chrome initialized successfully")
+        except Exception as e:
             logger.error("Failed to initialize WebDriver: %s", e)
             raise
 
@@ -277,6 +218,39 @@ class FacebookMarketplaceScraper:
                     btn.click()
                     logger.info("Cookie dialog dismissed with selector: %s", selector)
                     self._random_delay(2, 3)
+                    return True
+            except (NoSuchElementException, Exception):
+                continue
+
+        return False
+
+    def _dismiss_automated_popup(self):
+        """Dismiss popup 'We suspect automated behaviour on your account'."""
+        popup_selectors = [
+            # Tombol "Dismiss" (English)
+            (By.XPATH, '//div[@role="button" and .//span[text()="Dismiss"]]'),
+            (By.XPATH, '//div[@role="button" and .//span[text()="dismiss"]]'),
+            (By.XPATH, '//a[contains(text(), "Dismiss")]'),
+            (By.XPATH, '//span[text()="Dismiss"]/ancestor::div[@role="button"]'),
+            (By.XPATH, '//button[contains(text(), "Dismiss")]'),
+            # Tombol "Tutup" (Bahasa Indonesia)
+            (By.XPATH, '//div[@role="button" and .//span[text()="Tutup"]]'),
+            (By.XPATH, '//button[contains(text(), "Tutup")]'),
+            # Tombol OK
+            (By.XPATH, '//div[@role="button" and .//span[text()="OK"]]'),
+            (By.XPATH, '//button[contains(text(), "OK")]'),
+            # Generic dialog close
+            (By.CSS_SELECTOR, '[aria-label="Close"]'),
+            (By.CSS_SELECTOR, '[aria-label="Tutup"]'),
+        ]
+
+        for by, selector in popup_selectors:
+            try:
+                btn = self.driver.find_element(by, selector)
+                if btn.is_displayed():
+                    btn.click()
+                    logger.info("✓ Automated behaviour popup dismissed")
+                    self._random_delay(2, 4)
                     return True
             except (NoSuchElementException, Exception):
                 continue
@@ -451,11 +425,15 @@ class FacebookMarketplaceScraper:
             logger.info("Post-login URL: %s", self.driver.current_url)
             logger.info("Post-login title: %s", self.driver.title)
 
+            # Dismiss popup "automated behaviour" jika muncul
+            self._dismiss_automated_popup()
+
             # Cek apakah login berhasil
             if self._check_logged_in():
                 logger.info("✓ Login berhasil via %s!", url)
                 self._save_cookies()
                 self._is_logged_in = True
+                self._last_session_check = time.time()
                 return True
             else:
                 logger.error("Login gagal via %s", url)
@@ -677,6 +655,9 @@ class FacebookMarketplaceScraper:
             logger.info("Scraping: '%s' (city=%s)", criteria.keyword, city)
             self.driver.get(url)
             self._random_delay(4, 7)
+
+            # Dismiss popup "automated behaviour" jika muncul
+            self._dismiss_automated_popup()
 
             # Cek apakah halaman berhasil dimuat
             if "login" in self.driver.current_url.lower():
